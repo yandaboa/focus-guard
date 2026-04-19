@@ -52,8 +52,7 @@ def get_browser_url(browser: str) -> str | None:
 
 
 def send_notification(title: str, message: str):
-    script = f'display notification "{message}" with title "{title}" sound name "Funk"'
-    subprocess.run(["osascript", "-e", script], capture_output=True)
+    rumps.notification(title=title, subtitle=None, message=message, sound=True)
 
 
 def open_config_in_editor():
