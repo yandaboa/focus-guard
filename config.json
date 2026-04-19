@@ -1,6 +1,5 @@
 {
   "cooldown_seconds": 300,
-  "check_interval_seconds": 1.5,
   "blocked_apps": [
     "Discord",
     "Slack",

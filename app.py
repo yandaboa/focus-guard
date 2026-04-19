@@ -10,7 +10,8 @@ import threading
 import time
 
 import rumps
-from AppKit import NSWorkspace
+from AppKit import NSWorkspace, NSWorkspaceDidActivateApplicationNotification
+from Foundation import NSOperationQueue
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -22,7 +23,6 @@ log = logging.getLogger("focusguard")
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 BROWSERS = {"Google Chrome", "Safari", "Firefox", "Arc", "Brave Browser", "Microsoft Edge"}
 
-# AppleScript templates per browser
 BROWSER_URL_SCRIPTS = {
     "Google Chrome": 'tell application "Google Chrome" to get URL of active tab of front window',
     "Arc":           'tell application "Arc" to get URL of active tab of front window',
@@ -38,16 +38,6 @@ def load_config() -> dict:
         return json.load(f)
 
 
-def save_config(cfg: dict):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(cfg, f, indent=2)
-
-
-def get_active_app() -> str | None:
-    app = NSWorkspace.sharedWorkspace().frontmostApplication()
-    return app.localizedName() if app else None
-
-
 def get_browser_url(browser: str) -> str | None:
     script = BROWSER_URL_SCRIPTS.get(browser)
     if not script:
@@ -60,7 +50,7 @@ def get_browser_url(browser: str) -> str | None:
 
 
 def send_notification(title: str, message: str):
-    log.info("NOTIFY  title=%r  message=%r", title, message)
+    log.info("NOTIFY  %r — %r", title, message)
     try:
         rumps.notification(title=title, subtitle=None, message=message, sound=True)
         log.info("NOTIFY  sent OK")
@@ -68,17 +58,13 @@ def send_notification(title: str, message: str):
         log.error("NOTIFY  failed: %s", e)
 
 
-def open_config_in_editor():
-    subprocess.run(["open", "-e", CONFIG_PATH])
-
-
 class FocusGuard(rumps.App):
     def __init__(self):
         super().__init__("🎯", quit_button="Quit")
         self.config = load_config()
         self.enabled = True
-        self._last_notified: dict[str, float] = {}  # key -> last notification time
-        self._last_app: str | None = None
+        self._last_notified: dict[str, float] = {}
+        self._current_app: str | None = None
         self._last_url: str | None = None
         self._lock = threading.Lock()
 
@@ -90,10 +76,59 @@ class FocusGuard(rumps.App):
             rumps.MenuItem("Reload config", callback=self.reload_config),
         ]
 
-        t = threading.Thread(target=self._monitor_loop, daemon=True)
+        # Subscribe to NSWorkspace app-activation events (fires instantly on every switch)
+        nc = NSWorkspace.sharedWorkspace().notificationCenter()
+        nc.addObserverForName_object_queue_usingBlock_(
+            NSWorkspaceDidActivateApplicationNotification,
+            None,
+            NSOperationQueue.mainQueue(),
+            self._on_app_activated,
+        )
+        log.info("Subscribed to NSWorkspace app-activation notifications")
+
+        # Browser URL polling (only matters while a browser is active)
+        t = threading.Thread(target=self._browser_url_loop, daemon=True)
         t.start()
 
-    # ── Menu actions ────────────────────────────────────────────────────────
+    # ── NSWorkspace callback ─────────────────────────────────────────────────
+
+    def _on_app_activated(self, notification):
+        app_obj = notification.userInfo().get("NSWorkspaceApplicationKey")
+        name = app_obj.localizedName() if app_obj else None
+        log.debug("App switch -> %r", name)
+        self._current_app = name
+        self._last_url = None
+
+        if not self.enabled or not name:
+            return
+        if self._is_blocked_app(name):
+            log.info("Blocked app: %r", name)
+            self._maybe_notify(key=f"app:{name}", subject=name)
+
+    # ── Browser URL polling ──────────────────────────────────────────────────
+
+    def _browser_url_loop(self):
+        while True:
+            time.sleep(0.75)
+            if not self.enabled:
+                continue
+            app = self._current_app
+            if app not in BROWSERS:
+                continue
+            try:
+                url = get_browser_url(app)
+            except Exception:
+                continue
+            if not url or url == self._last_url:
+                continue
+            self._last_url = url
+            log.debug("URL -> %s", url)
+            site = self._blocked_site_for_url(url)
+            if site:
+                log.info("Blocked site: %r", site)
+                self._maybe_notify(key=f"site:{site}", subject=site)
+
+    # ── Menu actions ─────────────────────────────────────────────────────────
 
     def toggle_enabled(self, sender):
         self.enabled = not self.enabled
@@ -105,57 +140,16 @@ class FocusGuard(rumps.App):
             sender.title = "Resume monitoring"
 
     def open_config(self, _):
-        open_config_in_editor()
+        subprocess.run(["open", "-e", CONFIG_PATH])
 
     def reload_config(self, _):
         self.config = load_config()
         rumps.notification("FocusGuard", "", "Config reloaded.")
 
-    # ── Core monitor ────────────────────────────────────────────────────────
+    # ── Helpers ──────────────────────────────────────────────────────────────
 
-    def _monitor_loop(self):
-        interval = self.config.get("check_interval_seconds", 1.5)
-        log.info("Monitor loop started (interval=%.1fs)", interval)
-        while True:
-            try:
-                self._tick()
-            except Exception as e:
-                log.error("Tick error: %s", e, exc_info=True)
-            time.sleep(interval)
-
-    def _tick(self):
-        if not self.enabled:
-            return
-
-        current_app = get_active_app()
-
-        # App switch
-        if current_app != self._last_app:
-            log.debug("App switch: %r -> %r", self._last_app, current_app)
-            self._last_app = current_app
-            self._last_url = None
-            if current_app and self._is_blocked_app(current_app):
-                log.info("Blocked app detected: %r", current_app)
-                self._maybe_notify(key=f"app:{current_app}", subject=current_app)
-            elif current_app:
-                log.debug("App %r is not blocked", current_app)
-
-        # Browser URL check
-        if current_app in BROWSERS:
-            try:
-                url = get_browser_url(current_app)
-            except Exception:
-                url = None
-
-            if url and url != self._last_url:
-                self._last_url = url
-                blocked_site = self._blocked_site_for_url(url)
-                if blocked_site:
-                    self._maybe_notify(key=f"site:{blocked_site}", subject=blocked_site)
-
-    def _is_blocked_app(self, app_name: str) -> bool:
-        blocked = self.config.get("blocked_apps", [])
-        return any(b.lower() == app_name.lower() for b in blocked)
+    def _is_blocked_app(self, name: str) -> bool:
+        return any(b.lower() == name.lower() for b in self.config.get("blocked_apps", []))
 
     def _blocked_site_for_url(self, url: str) -> str | None:
         url_lower = url.lower()
@@ -168,15 +162,13 @@ class FocusGuard(rumps.App):
         now = time.time()
         cooldown = self.config.get("cooldown_seconds", 300)
         with self._lock:
-            last = self._last_notified.get(key, 0)
-            remaining = cooldown - (now - last)
+            remaining = cooldown - (now - self._last_notified.get(key, 0))
             if remaining > 0:
-                log.debug("Cooldown active for %r — %.0fs remaining", key, remaining)
+                log.debug("Cooldown %r — %.0fs left", key, remaining)
                 return
             self._last_notified[key] = now
 
-        messages = self.config.get("reminder_messages", ["Stay focused."])
-        msg = random.choice(messages)
+        msg = random.choice(self.config.get("reminder_messages", ["Stay focused."]))
         send_notification(f"Hey — you opened {subject}", msg)
 
 
