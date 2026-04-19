@@ -10,8 +10,12 @@ import threading
 import time
 
 import rumps
-from AppKit import NSWorkspace, NSWorkspaceDidActivateApplicationNotification
-from Foundation import NSOperationQueue
+from AppKit import (
+    NSBackingStoreBuffered, NSBezierPath, NSColor, NSFloatingWindowLevel,
+    NSFont, NSMakeRect, NSPanel, NSScreen, NSTextField, NSTextAlignmentCenter,
+    NSView, NSWorkspace, NSWorkspaceDidActivateApplicationNotification,
+)
+from Foundation import NSObject, NSOperationQueue, NSThread, NSTimer
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -32,6 +36,99 @@ BROWSER_URL_SCRIPTS = {
     "Firefox":       'tell application "Firefox" to get URL of active tab of front window',
 }
 
+BANNER_W = 440
+BANNER_H = 80
+BANNER_DURATION = 5.0
+
+# Keep strong references so banners aren't garbage-collected before they close
+_live_banners: list = []
+
+
+# ── Main-thread dispatch ──────────────────────────────────────────────────────
+
+class _Caller(NSObject):
+    def call_(self, block):
+        block()
+
+_caller = _Caller.new()
+
+def on_main(fn):
+    if NSThread.isMainThread():
+        fn()
+    else:
+        _caller.performSelectorOnMainThread_withObject_waitUntilDone_("call:", fn, False)
+
+
+# ── Floating banner ───────────────────────────────────────────────────────────
+
+class _RoundedView(NSView):
+    def drawRect_(self, rect):
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 14, 14)
+        NSColor.colorWithRed_green_blue_alpha_(0.08, 0.08, 0.08, 0.93).setFill()
+        path.fill()
+
+
+def _show_banner(title: str, message: str):
+    """Create and display a floating banner. MUST be called on the main thread."""
+    screen = NSScreen.mainScreen()
+    sf = screen.frame()
+
+    x = (sf.size.width - BANNER_W) / 2 + sf.origin.x
+    # Just below the menu bar (menu bar is ~24px tall on retina; sf.origin.y is bottom)
+    y = sf.origin.y + sf.size.height - BANNER_H - 48
+
+    # NSWindowStyleMaskBorderless=0, NSWindowStyleMaskNonactivatingPanel=128
+    panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+        NSMakeRect(x, y, BANNER_W, BANNER_H),
+        128,  # NSWindowStyleMaskNonactivatingPanel (borderless implied)
+        NSBackingStoreBuffered,
+        False,
+    )
+    panel.setLevel_(NSFloatingWindowLevel + 1)
+    panel.setOpaque_(False)
+    panel.setBackgroundColor_(NSColor.clearColor())
+    panel.setHasShadow_(True)
+    panel.setIgnoresMouseEvents_(True)
+    panel.setReleasedWhenClosed_(False)
+
+    bg = _RoundedView.alloc().initWithFrame_(NSMakeRect(0, 0, BANNER_W, BANNER_H))
+    panel.setContentView_(bg)
+
+    title_field = NSTextField.labelWithString_(title)
+    title_field.setFrame_(NSMakeRect(16, BANNER_H - 30, BANNER_W - 32, 18))
+    title_field.setFont_(NSFont.boldSystemFontOfSize_(13))
+    title_field.setTextColor_(NSColor.whiteColor())
+    title_field.setAlignment_(NSTextAlignmentCenter)
+    bg.addSubview_(title_field)
+
+    msg_field = NSTextField.labelWithString_(message)
+    msg_field.setFrame_(NSMakeRect(16, 10, BANNER_W - 32, 34))
+    msg_field.setFont_(NSFont.systemFontOfSize_(12))
+    msg_field.setTextColor_(NSColor.colorWithWhite_alpha_(0.85, 1.0))
+    msg_field.setAlignment_(NSTextAlignmentCenter)
+    msg_field.setMaximumNumberOfLines_(2)
+    bg.addSubview_(msg_field)
+
+    panel.orderFrontRegardless()
+    _live_banners.append(panel)
+    log.info("Banner shown: %r — %r", title, message)
+
+    NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+        BANNER_DURATION, False, lambda _: _dismiss(panel)
+    )
+
+
+def _dismiss(panel):
+    panel.close()
+    if panel in _live_banners:
+        _live_banners.remove(panel)
+
+
+def show_banner(title: str, message: str):
+    on_main(lambda: _show_banner(title, message))
+
+
+# ── Config ────────────────────────────────────────────────────────────────────
 
 def load_config() -> dict:
     with open(CONFIG_PATH) as f:
@@ -43,27 +140,12 @@ def get_browser_url(browser: str) -> str | None:
     if not script:
         return None
     result = subprocess.run(
-        ["osascript", "-e", script],
-        capture_output=True, text=True, timeout=2
+        ["osascript", "-e", script], capture_output=True, text=True, timeout=2
     )
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-TERMINAL_NOTIFIER = "/usr/local/bin/terminal-notifier"
-
-def send_notification(title: str, message: str):
-    """Must be called from a background thread — subprocess.run blocks the main run loop."""
-    log.info("NOTIFY  %r — %r", title, message)
-    try:
-        result = subprocess.run(
-            [TERMINAL_NOTIFIER, "-title", title, "-message", message,
-             "-sound", "default", "-group", "focusguard"],
-            capture_output=True, timeout=5
-        )
-        log.info("NOTIFY  returncode=%d stderr=%r", result.returncode, result.stderr.decode())
-    except Exception as e:
-        log.error("NOTIFY  failed: %s", e)
-
+# ── App ───────────────────────────────────────────────────────────────────────
 
 class FocusGuard(rumps.App):
     def __init__(self):
@@ -79,12 +161,11 @@ class FocusGuard(rumps.App):
         self.menu = [
             self.toggle_item,
             None,
-            rumps.MenuItem("Test notification", callback=self.test_notification),
+            rumps.MenuItem("Test banner", callback=self.test_banner),
             rumps.MenuItem("Edit blocked apps/sites...", callback=self.open_config),
             rumps.MenuItem("Reload config", callback=self.reload_config),
         ]
 
-        # Subscribe to NSWorkspace app-activation events (fires instantly on every switch)
         nc = NSWorkspace.sharedWorkspace().notificationCenter()
         nc.addObserverForName_object_queue_usingBlock_(
             NSWorkspaceDidActivateApplicationNotification,
@@ -94,11 +175,7 @@ class FocusGuard(rumps.App):
         )
         log.info("Subscribed to NSWorkspace app-activation notifications")
 
-        # Browser URL polling (only matters while a browser is active)
-        t = threading.Thread(target=self._browser_url_loop, daemon=True)
-        t.start()
-
-    # ── NSWorkspace callback ─────────────────────────────────────────────────
+        threading.Thread(target=self._browser_url_loop, daemon=True).start()
 
     def _on_app_activated(self, notification):
         app_obj = notification.userInfo().get("NSWorkspaceApplicationKey")
@@ -112,8 +189,6 @@ class FocusGuard(rumps.App):
         if self._is_blocked_app(name):
             log.info("Blocked app: %r", name)
             self._maybe_notify(key=f"app:{name}", subject=name)
-
-    # ── Browser URL polling ──────────────────────────────────────────────────
 
     def _browser_url_loop(self):
         while True:
@@ -136,32 +211,20 @@ class FocusGuard(rumps.App):
                 log.info("Blocked site: %r", site)
                 self._maybe_notify(key=f"site:{site}", subject=site)
 
-    # ── Menu actions ─────────────────────────────────────────────────────────
-
     def toggle_enabled(self, sender):
         self.enabled = not self.enabled
-        if self.enabled:
-            self.title = "🎯"
-            sender.title = "Pause monitoring"
-        else:
-            self.title = "😴"
-            sender.title = "Resume monitoring"
+        self.title = "🎯" if self.enabled else "😴"
+        sender.title = "Pause monitoring" if self.enabled else "Resume monitoring"
 
-    def test_notification(self, _):
-        threading.Thread(
-            target=send_notification,
-            args=("FocusGuard Test", "If you see this, notifications work!"),
-            daemon=True
-        ).start()
+    def test_banner(self, _):
+        show_banner("FocusGuard Test", "If you can read this, the banner works!")
 
     def open_config(self, _):
         subprocess.run(["open", "-e", CONFIG_PATH])
 
     def reload_config(self, _):
         self.config = load_config()
-        rumps.notification("FocusGuard", "", "Config reloaded.")
-
-    # ── Helpers ──────────────────────────────────────────────────────────────
+        show_banner("FocusGuard", "Config reloaded.")
 
     def _is_blocked_app(self, name: str) -> bool:
         return any(b.lower() == name.lower() for b in self.config.get("blocked_apps", []))
@@ -175,7 +238,7 @@ class FocusGuard(rumps.App):
 
     def _maybe_notify(self, key: str, subject: str):
         now = time.time()
-        cooldown = self.config.get("cooldown_seconds", 300)
+        cooldown = self.config.get("cooldown_seconds", 0)
         with self._lock:
             remaining = cooldown - (now - self._last_notified.get(key, 0))
             if remaining > 0:
@@ -184,11 +247,7 @@ class FocusGuard(rumps.App):
             self._last_notified[key] = now
 
         msg = random.choice(self.config.get("reminder_messages", ["Stay focused."]))
-        threading.Thread(
-            target=send_notification,
-            args=(f"Hey — you opened {subject}", msg),
-            daemon=True
-        ).start()
+        show_banner(f"Hey — you opened {subject}", msg)
 
 
 if __name__ == "__main__":
