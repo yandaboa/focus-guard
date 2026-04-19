@@ -10,6 +10,7 @@ import threading
 import time
 
 import rumps
+from settings import SettingsWindow
 from AppKit import (
     NSBackingStoreBuffered, NSBezierPath, NSColor, NSFloatingWindowLevel,
     NSFont, NSMakeRect, NSPanel, NSScreen, NSTextField, NSTextAlignmentCenter,
@@ -135,6 +136,11 @@ def load_config() -> dict:
         return json.load(f)
 
 
+def save_config(cfg: dict):
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+
 def get_browser_url(browser: str) -> str | None:
     script = BROWSER_URL_SCRIPTS.get(browser)
     if not script:
@@ -162,8 +168,7 @@ class FocusGuard(rumps.App):
             self.toggle_item,
             None,
             rumps.MenuItem("Test banner", callback=self.test_banner),
-            rumps.MenuItem("Edit blocked apps/sites...", callback=self.open_config),
-            rumps.MenuItem("Reload config", callback=self.reload_config),
+            rumps.MenuItem("Settings...", callback=self.open_settings),
         ]
 
         nc = NSWorkspace.sharedWorkspace().notificationCenter()
@@ -219,12 +224,14 @@ class FocusGuard(rumps.App):
     def test_banner(self, _):
         show_banner("FocusGuard Test", "If you can read this, the banner works!")
 
-    def open_config(self, _):
-        subprocess.run(["open", "-e", CONFIG_PATH])
+    def open_settings(self, _):
+        SettingsWindow.show(self.config, on_save=self._apply_config)
 
-    def reload_config(self, _):
-        self.config = load_config()
-        show_banner("FocusGuard", "Config reloaded.")
+    def _apply_config(self, new_config: dict):
+        save_config(new_config)
+        self.config = new_config
+        log.info("Config saved: %d apps, %d sites", len(new_config["blocked_apps"]), len(new_config["blocked_sites"]))
+        show_banner("FocusGuard", "Settings saved.")
 
     def _is_blocked_app(self, name: str) -> bool:
         return any(b.lower() == name.lower() for b in self.config.get("blocked_apps", []))
