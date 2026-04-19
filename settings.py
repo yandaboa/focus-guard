@@ -7,6 +7,11 @@ from AppKit import (
 )
 from Foundation import NSMakeRange
 
+# Activation policy constants
+_POLICY_REGULAR   = 0  # shows in Dock
+_POLICY_ACCESSORY = 1  # no Dock icon, but can own windows/key focus
+_POLICY_PROHIBITED = 2  # LSUIElement default — cannot become active
+
 W, H, PAD = 560, 510, 20
 COL = (W - PAD * 3) // 2  # ~250 px per column
 
@@ -104,6 +109,9 @@ class SettingsWindow:
         cv = self._window.contentView()
         self._build_ui(cv, config)
 
+        # LSUIElement apps can't own key windows by default — temporarily
+        # switch to Accessory policy so the settings window gets focus.
+        NSApp.setActivationPolicy_(_POLICY_ACCESSORY)
         NSApp.activateIgnoringOtherApps_(True)
         self._window.makeKeyAndOrderFront_(None)
 
@@ -177,3 +185,5 @@ class SettingsWindow:
     def _close(self):
         SettingsWindow._open = None
         self._window.close()
+        # Revert to background-only mode so we stay out of the Dock/app switcher
+        NSApp.setActivationPolicy_(_POLICY_PROHIBITED)
