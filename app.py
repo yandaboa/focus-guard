@@ -52,16 +52,15 @@ def get_browser_url(browser: str) -> str | None:
 TERMINAL_NOTIFIER = "/usr/local/bin/terminal-notifier"
 
 def send_notification(title: str, message: str):
+    """Must be called from a background thread — subprocess.run blocks the main run loop."""
     log.info("NOTIFY  %r — %r", title, message)
     try:
         result = subprocess.run(
-            [TERMINAL_NOTIFIER, "-title", title, "-message", message, "-sound", "default"],
+            [TERMINAL_NOTIFIER, "-title", title, "-message", message,
+             "-sound", "default", "-group", "focusguard"],
             capture_output=True, timeout=5
         )
-        if result.returncode == 0:
-            log.info("NOTIFY  sent OK")
-        else:
-            log.error("NOTIFY  terminal-notifier error: %s", result.stderr.decode())
+        log.info("NOTIFY  returncode=%d stderr=%r", result.returncode, result.stderr.decode())
     except Exception as e:
         log.error("NOTIFY  failed: %s", e)
 
@@ -80,6 +79,7 @@ class FocusGuard(rumps.App):
         self.menu = [
             self.toggle_item,
             None,
+            rumps.MenuItem("Test notification", callback=self.test_notification),
             rumps.MenuItem("Edit blocked apps/sites...", callback=self.open_config),
             rumps.MenuItem("Reload config", callback=self.reload_config),
         ]
@@ -147,6 +147,13 @@ class FocusGuard(rumps.App):
             self.title = "😴"
             sender.title = "Resume monitoring"
 
+    def test_notification(self, _):
+        threading.Thread(
+            target=send_notification,
+            args=("FocusGuard Test", "If you see this, notifications work!"),
+            daemon=True
+        ).start()
+
     def open_config(self, _):
         subprocess.run(["open", "-e", CONFIG_PATH])
 
@@ -177,7 +184,11 @@ class FocusGuard(rumps.App):
             self._last_notified[key] = now
 
         msg = random.choice(self.config.get("reminder_messages", ["Stay focused."]))
-        send_notification(f"Hey — you opened {subject}", msg)
+        threading.Thread(
+            target=send_notification,
+            args=(f"Hey — you opened {subject}", msg),
+            daemon=True
+        ).start()
 
 
 if __name__ == "__main__":
