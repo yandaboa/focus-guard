@@ -1,0 +1,33 @@
+{
+  "cooldown_seconds": 300,
+  "check_interval_seconds": 1.5,
+  "blocked_apps": [
+    "Discord",
+    "Slack",
+    "WhatsApp",
+    "Telegram",
+    "Messages",
+    "Twitter",
+    "Spotify",
+    "Steam"
+  ],
+  "blocked_sites": [
+    "twitter.com",
+    "x.com",
+    "reddit.com",
+    "youtube.com",
+    "instagram.com",
+    "facebook.com",
+    "tiktok.com",
+    "twitch.tv",
+    "news.ycombinator.com",
+    "linkedin.com"
+  ],
+  "reminder_messages": [
+    "Stay focused — you've got things to do.",
+    "Is this the best use of your time right now?",
+    "Remember what you were working on.",
+    "Quick check-in: is this intentional?",
+    "Eyes on the prize. Get back to work."
+  ]
+}
