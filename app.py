@@ -2,6 +2,7 @@
 """FocusGuard — macOS menu bar app that nudges you when you switch to distracting apps/sites."""
 
 import json
+import logging
 import os
 import random
 import subprocess
@@ -10,6 +11,13 @@ import time
 
 import rumps
 from AppKit import NSWorkspace
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s  %(levelname)-7s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("focusguard")
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 BROWSERS = {"Google Chrome", "Safari", "Firefox", "Arc", "Brave Browser", "Microsoft Edge"}
@@ -52,7 +60,12 @@ def get_browser_url(browser: str) -> str | None:
 
 
 def send_notification(title: str, message: str):
-    rumps.notification(title=title, subtitle=None, message=message, sound=True)
+    log.info("NOTIFY  title=%r  message=%r", title, message)
+    try:
+        rumps.notification(title=title, subtitle=None, message=message, sound=True)
+        log.info("NOTIFY  sent OK")
+    except Exception as e:
+        log.error("NOTIFY  failed: %s", e)
 
 
 def open_config_in_editor():
@@ -102,11 +115,12 @@ class FocusGuard(rumps.App):
 
     def _monitor_loop(self):
         interval = self.config.get("check_interval_seconds", 1.5)
+        log.info("Monitor loop started (interval=%.1fs)", interval)
         while True:
             try:
                 self._tick()
-            except Exception:
-                pass
+            except Exception as e:
+                log.error("Tick error: %s", e, exc_info=True)
             time.sleep(interval)
 
     def _tick(self):
@@ -117,10 +131,14 @@ class FocusGuard(rumps.App):
 
         # App switch
         if current_app != self._last_app:
+            log.debug("App switch: %r -> %r", self._last_app, current_app)
             self._last_app = current_app
-            self._last_url = None  # reset URL tracking on app switch
+            self._last_url = None
             if current_app and self._is_blocked_app(current_app):
+                log.info("Blocked app detected: %r", current_app)
                 self._maybe_notify(key=f"app:{current_app}", subject=current_app)
+            elif current_app:
+                log.debug("App %r is not blocked", current_app)
 
         # Browser URL check
         if current_app in BROWSERS:
@@ -151,7 +169,9 @@ class FocusGuard(rumps.App):
         cooldown = self.config.get("cooldown_seconds", 300)
         with self._lock:
             last = self._last_notified.get(key, 0)
-            if now - last < cooldown:
+            remaining = cooldown - (now - last)
+            if remaining > 0:
+                log.debug("Cooldown active for %r — %.0fs remaining", key, remaining)
                 return
             self._last_notified[key] = now
 
