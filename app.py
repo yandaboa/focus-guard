@@ -64,7 +64,7 @@ def on_main(fn):
 class _RoundedView(NSView):
     def drawRect_(self, rect):
         path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 14, 14)
-        NSColor.colorWithRed_green_blue_alpha_(0.08, 0.08, 0.08, 0.93).setFill()
+        NSColor.colorWithRed_green_blue_alpha_(0.85, 0.30, 0.05, 0.96).setFill()
         path.fill()
 
 
