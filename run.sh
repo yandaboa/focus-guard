@@ -22,5 +22,11 @@ if ! python -c "import rumps" 2>/dev/null; then
   echo "Done."
 fi
 
+# rumps requires an Info.plist with CFBundleIdentifier to use the notification center
+PLIST="$VENV/bin/Info.plist"
+if [ ! -f "$PLIST" ]; then
+  /usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string "com.focusguard.app"' "$PLIST"
+fi
+
 echo "Starting FocusGuard... (look for 🎯 in your menu bar)"
 python app.py
