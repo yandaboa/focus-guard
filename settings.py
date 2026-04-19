@@ -3,9 +3,10 @@
 import logging
 
 from AppKit import (
-    NSApp, NSBackingStoreBuffered, NSButton, NSColor, NSFont,
+    NSApp, NSAttributedString, NSBackingStoreBuffered, NSButton, NSColor, NSFont,
+    NSFontAttributeName, NSForegroundColorAttributeName,
     NSMakeRect, NSObject, NSScrollView, NSTextField, NSTextView,
-    NSView, NSVisualEffectView, NSWindow, NSBox,
+    NSView, NSVisualEffectView, NSWindow,
 )
 from Foundation import NSMakeRange
 
@@ -52,22 +53,38 @@ def _textview(frame):
     tv = NSTextView.alloc().initWithFrame_(
         NSMakeRect(0, 0, frame.size.width, frame.size.height)
     )
-    tv.setFont_(NSFont.systemFontOfSize_(12))
-    tv.setTextColor_(NSColor.labelColor())
+    font  = NSFont.systemFontOfSize_(12)
+    color = NSColor.labelColor()
+    tv.setFont_(font)
+    tv.setTextColor_(color)
     tv.setBackgroundColor_(NSColor.textBackgroundColor())
+    tv.setInsertionPointColor_(NSColor.labelColor())
     tv.setAutomaticQuoteSubstitutionEnabled_(False)
     tv.setAutomaticDashSubstitutionEnabled_(False)
     tv.setRichText_(False)
     tv.setAutoresizingMask_(2 | 16)   # NSViewWidthSizable | NSViewHeightSizable
     tv.setTextContainerInset_((6, 6))
+    # Ensure typed text always uses the right color/font
+    tv.setTypingAttributes_({
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: color,
+    })
     scroll.setDocumentView_(tv)
     return scroll, tv
 
 
 def _set_tv(tv, lines: list[str]):
-    tv.textStorage().replaceCharactersInRange_withString_(
-        NSMakeRange(0, tv.string().length()), "\n".join(lines)
+    font  = NSFont.systemFontOfSize_(12)
+    color = NSColor.labelColor()
+    attrs = {
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: color,
+    }
+    astr = NSAttributedString.alloc().initWithString_attributes_(
+        "\n".join(lines), attrs
     )
+    tv.textStorage().setAttributedString_(astr)
+    tv.setTypingAttributes_(attrs)
 
 
 def _get_tv(tv) -> list[str]:
