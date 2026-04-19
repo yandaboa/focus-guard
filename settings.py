@@ -37,7 +37,7 @@ def _textview(frame):
     tv = NSTextView.alloc().initWithFrame_(
         NSMakeRect(0, 0, frame.size.width, frame.size.height)
     )
-    tv.setFont_(NSFont.monospacedSystemFontOfSize_(12, 0))  # weight 0 = regular
+    tv.setFont_(NSFont.userFixedPitchFontOfSize_(12))
     tv.setAutomaticQuoteSubstitutionEnabled_(False)
     tv.setAutomaticDashSubstitutionEnabled_(False)
     tv.setRichText_(False)
@@ -84,6 +84,9 @@ class SettingsWindow:
     @classmethod
     def show(cls, config: dict, on_save):
         """Open the settings window (or bring it to front if already open)."""
+        import logging
+        log = logging.getLogger("focusguard.settings")
+        log.info("SettingsWindow.show called, _open=%s", cls._open)
         if cls._open is not None:
             try:
                 cls._open._window.makeKeyAndOrderFront_(None)
@@ -91,7 +94,9 @@ class SettingsWindow:
                 return
             except Exception:
                 cls._open = None
+        log.info("Creating new SettingsWindow instance")
         cls._open = cls(config, on_save)
+        log.info("SettingsWindow instance created")
 
     def __init__(self, config: dict, on_save):
         self._on_save = on_save
@@ -109,11 +114,14 @@ class SettingsWindow:
         cv = self._window.contentView()
         self._build_ui(cv, config)
 
-        # LSUIElement apps can't own key windows by default — temporarily
-        # switch to Accessory policy so the settings window gets focus.
+        import logging
+        log = logging.getLogger("focusguard.settings")
+        log.info("Showing window, frame=%s", self._window.frame())
         NSApp.setActivationPolicy_(_POLICY_ACCESSORY)
         NSApp.activateIgnoringOtherApps_(True)
         self._window.makeKeyAndOrderFront_(None)
+        self._window.orderFrontRegardless()
+        log.info("Window visible=%s isKeyWindow=%s", self._window.isVisible(), self._window.isKeyWindow())
 
     def _build_ui(self, cv: NSView, config: dict):
         # ── Header ────────────────────────────────────────────────────────────

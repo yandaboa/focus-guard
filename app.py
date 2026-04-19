@@ -225,7 +225,12 @@ class FocusGuard(rumps.App):
         show_banner("FocusGuard Test", "If you can read this, the banner works!")
 
     def open_settings(self, _):
-        SettingsWindow.show(self.config, on_save=self._apply_config)
+        log.info("open_settings called")
+        try:
+            SettingsWindow.show(self.config, on_save=self._apply_config)
+            log.info("SettingsWindow.show returned")
+        except Exception as e:
+            log.error("SettingsWindow error: %s", e, exc_info=True)
 
     def _apply_config(self, new_config: dict):
         save_config(new_config)
