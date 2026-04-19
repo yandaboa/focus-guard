@@ -1,5 +1,5 @@
 {
-  "cooldown_seconds": 300,
+  "cooldown_seconds": 0,
   "blocked_apps": [
     "Discord",
     "Slack",

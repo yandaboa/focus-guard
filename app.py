@@ -49,11 +49,19 @@ def get_browser_url(browser: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+TERMINAL_NOTIFIER = "/usr/local/bin/terminal-notifier"
+
 def send_notification(title: str, message: str):
     log.info("NOTIFY  %r — %r", title, message)
     try:
-        rumps.notification(title=title, subtitle=None, message=message, sound=True)
-        log.info("NOTIFY  sent OK")
+        result = subprocess.run(
+            [TERMINAL_NOTIFIER, "-title", title, "-message", message, "-sound", "default"],
+            capture_output=True, timeout=5
+        )
+        if result.returncode == 0:
+            log.info("NOTIFY  sent OK")
+        else:
+            log.error("NOTIFY  terminal-notifier error: %s", result.stderr.decode())
     except Exception as e:
         log.error("NOTIFY  failed: %s", e)
 
