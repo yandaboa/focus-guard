@@ -37,8 +37,6 @@ BROWSER_URL_SCRIPTS = {
     "Firefox":       'tell application "Firefox" to get URL of active tab of front window',
 }
 
-BANNER_W = 440
-BANNER_H = 80
 BANNER_DURATION = 5.0
 
 # Keep strong references so banners aren't garbage-collected before they close
@@ -64,24 +62,25 @@ def on_main(fn):
 
 class _RoundedView(NSView):
     def drawRect_(self, rect):
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 14, 14)
-        NSColor.colorWithRed_green_blue_alpha_(0.85, 0.30, 0.05, 0.96).setFill()
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 28, 28)
+        NSColor.colorWithRed_green_blue_alpha_(0.85, 0.25, 0.04, 0.97).setFill()
         path.fill()
 
 
 def _show_banner(title: str, message: str):
-    """Create and display a floating banner. MUST be called on the main thread."""
+    """Create and display a large overlay banner. MUST be called on the main thread."""
     screen = NSScreen.mainScreen()
     sf = screen.frame()
 
-    x = (sf.size.width - BANNER_W) / 2 + sf.origin.x
-    # Just below the menu bar (menu bar is ~24px tall on retina; sf.origin.y is bottom)
-    y = sf.origin.y + sf.size.height - BANNER_H - 48
+    # ~80% wide, ~38% tall — big enough to genuinely interrupt
+    w = sf.size.width  * 0.80
+    h = sf.size.height * 0.38
+    x = (sf.size.width  - w) / 2 + sf.origin.x
+    y = (sf.size.height - h) / 2 + sf.origin.y   # dead center
 
-    # NSWindowStyleMaskBorderless=0, NSWindowStyleMaskNonactivatingPanel=128
     panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-        NSMakeRect(x, y, BANNER_W, BANNER_H),
-        128,  # NSWindowStyleMaskNonactivatingPanel (borderless implied)
+        NSMakeRect(x, y, w, h),
+        128,  # NSWindowStyleMaskNonactivatingPanel
         NSBackingStoreBuffered,
         False,
     )
@@ -92,23 +91,43 @@ def _show_banner(title: str, message: str):
     panel.setIgnoresMouseEvents_(True)
     panel.setReleasedWhenClosed_(False)
 
-    bg = _RoundedView.alloc().initWithFrame_(NSMakeRect(0, 0, BANNER_W, BANNER_H))
+    bg = _RoundedView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
     panel.setContentView_(bg)
 
+    pad = w * 0.07
+
+    # Big warning emoji
+    emoji_field = NSTextField.labelWithString_("⚠️")
+    emoji_field.setFrame_(NSMakeRect(0, h * 0.58, w, h * 0.28))
+    emoji_field.setFont_(NSFont.systemFontOfSize_(h * 0.22))
+    emoji_field.setAlignment_(NSTextAlignmentCenter)
+    bg.addSubview_(emoji_field)
+
+    # Title
     title_field = NSTextField.labelWithString_(title)
-    title_field.setFrame_(NSMakeRect(16, BANNER_H - 30, BANNER_W - 32, 18))
-    title_field.setFont_(NSFont.boldSystemFontOfSize_(13))
+    title_field.setFrame_(NSMakeRect(pad, h * 0.36, w - pad * 2, h * 0.22))
+    title_field.setFont_(NSFont.boldSystemFontOfSize_(h * 0.11))
     title_field.setTextColor_(NSColor.whiteColor())
     title_field.setAlignment_(NSTextAlignmentCenter)
+    title_field.setMaximumNumberOfLines_(1)
     bg.addSubview_(title_field)
 
+    # Message
     msg_field = NSTextField.labelWithString_(message)
-    msg_field.setFrame_(NSMakeRect(16, 10, BANNER_W - 32, 34))
-    msg_field.setFont_(NSFont.systemFontOfSize_(12))
-    msg_field.setTextColor_(NSColor.colorWithWhite_alpha_(0.85, 1.0))
+    msg_field.setFrame_(NSMakeRect(pad, h * 0.12, w - pad * 2, h * 0.22))
+    msg_field.setFont_(NSFont.systemFontOfSize_(h * 0.075))
+    msg_field.setTextColor_(NSColor.colorWithWhite_alpha_(0.92, 1.0))
     msg_field.setAlignment_(NSTextAlignmentCenter)
     msg_field.setMaximumNumberOfLines_(2)
     bg.addSubview_(msg_field)
+
+    # Countdown hint
+    hint = NSTextField.labelWithString_(f"Closing in {int(BANNER_DURATION)}s…")
+    hint.setFrame_(NSMakeRect(pad, h * 0.03, w - pad * 2, h * 0.07))
+    hint.setFont_(NSFont.systemFontOfSize_(h * 0.045))
+    hint.setTextColor_(NSColor.colorWithWhite_alpha_(0.6, 1.0))
+    hint.setAlignment_(NSTextAlignmentCenter)
+    bg.addSubview_(hint)
 
     panel.orderFrontRegardless()
     _live_banners.append(panel)
